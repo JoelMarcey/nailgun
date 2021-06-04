@@ -338,7 +338,7 @@ public class NGCommunicator implements Closeable {
 
     // send the command - client will exit
     try (PrintStream exit = new PrintStream(new NGOutputStream(this, NGConstants.CHUNKTYPE_EXIT))) {
-      exit.println(exitCode);
+      exit.print(exitCode);
     }
     isExited = true;
 

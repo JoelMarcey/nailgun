@@ -18,6 +18,7 @@ limitations under the License.
 
 package com.facebook.nailgun;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.mock;
@@ -88,5 +89,16 @@ class NGCommunicatorTest {
     comm.send(NGConstants.CHUNKTYPE_STDOUT, data, 0, data.length);
 
     verify(ostream).write(data, 0, data.length);
+  }
+
+  @Test
+  void canSendExitCode() throws IOException {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    when(socket.getOutputStream()).thenReturn(output);
+
+    NGCommunicator comm = new NGCommunicator(socket, 0);
+    comm.exit(42);
+
+    assertArrayEquals(new byte[] {0x00, 0x00, 0x00, 0x02, 'X', '4', '2'}, output.toByteArray());
   }
 }
