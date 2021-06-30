@@ -34,6 +34,8 @@ For additional client implementations in other languages, see:
 - [snailgun](https://github.com/jvican/snailgun), a client implementation written in Scala that compiles to native.
 - [railgun](https://github.com/timuralp/railgun), a client implementation written in Ruby.
 
+A PHP client is also available through the [nailgun-php](https://github.com/alirezameskin/nailgun-php) project.
+
 For more information, see [the nailgun website](https://github.com/facebook/nailgun).
 
 License
