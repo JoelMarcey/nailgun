@@ -11,7 +11,7 @@
 
   <groupId>com.facebook</groupId>
   <artifactId>nailgun-all</artifactId>
-  <version>1.0.1</version>
+  <version>1.0.2-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <properties>
