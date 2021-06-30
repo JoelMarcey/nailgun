@@ -236,101 +236,107 @@ public class NGSession extends Thread {
         ((ThreadLocalPrintStream) System.err).init(err);
       }
 
-      CommandContext cmdContext = comm.readCommandContext();
-
-      String threadName =
-          (socket.getInetAddress() == null ? "" : socket.getInetAddress().getHostAddress() + ": ")
-              + cmdContext.getCommand();
-      updateThreadName(threadName);
-
-      Class cmdclass;
       try {
-        Alias alias = server.getAliasManager().getAlias(cmdContext.getCommand());
-        if (alias != null) {
-          cmdclass = alias.getAliasedClass();
-        } else if (server.allowsNailsByClassName()) {
-          cmdclass = Class.forName(cmdContext.getCommand(), true, classLoader);
-        } else {
-          cmdclass = server.getDefaultNailClass();
-        }
-      } catch (ClassNotFoundException ex) {
-        throw new NGNailNotFoundException("Nail class not found: " + cmdContext.getCommand(), ex);
-      }
 
-      Object[] methodArgs = new Object[1];
-      Method mainMethod; // will be either main(String[]) or nailMain(NGContext)
-      String[] cmdlineArgs =
-          cmdContext
-              .getCommandArguments()
-              .toArray(new String[cmdContext.getCommandArguments().size()]);
+        CommandContext cmdContext = comm.readCommandContext();
 
-      boolean isStaticNail = true; // See: NonStaticNail.java
+        String threadName =
+            (socket.getInetAddress() == null ? "" : socket.getInetAddress().getHostAddress() + ": ")
+                + cmdContext.getCommand();
+        updateThreadName(threadName);
 
-      Class[] interfaces = cmdclass.getInterfaces();
-
-      for (int i = 0; i < interfaces.length; i++) {
-        if (interfaces[i].equals(NonStaticNail.class)) {
-          isStaticNail = false;
-          break;
-        }
-      }
-
-      if (!isStaticNail) {
-        mainMethod = cmdclass.getMethod("nailMain", new Class[] {String[].class});
-        methodArgs[0] = cmdlineArgs;
-      } else {
+        Class cmdclass;
         try {
-          mainMethod = cmdclass.getMethod("nailMain", nailMainSignature);
-          NGContext context = new NGContext();
-          context.setArgs(cmdlineArgs);
-          context.in = in;
-          context.out = out;
-          context.err = err;
-          context.setCommand(cmdContext.getCommand());
-          context.setNGServer(server);
-          context.setCommunicator(comm);
-          context.setEnv(cmdContext.getEnvironmentVariables());
-          context.setInetAddress(socket.getInetAddress());
-          context.setPort(socket.getPort());
-          context.setWorkingDirectory(cmdContext.getWorkingDirectory());
-          methodArgs[0] = context;
-        } catch (NoSuchMethodException toDiscard) {
-          // nailMain is not found, let's try main(String[])
-          try {
-            mainMethod = cmdclass.getMethod("main", mainSignature);
-            methodArgs[0] = cmdlineArgs;
-          } catch (NoSuchMethodException ex) {
-            // failed to find 'main' too, so give up and throw
-            throw new NGNailNotFoundException(
-                "Can't find nailMain or main functions in " + cmdclass.getName(), ex);
+          Alias alias = server.getAliasManager().getAlias(cmdContext.getCommand());
+          if (alias != null) {
+            cmdclass = alias.getAliasedClass();
+          } else if (server.allowsNailsByClassName()) {
+            cmdclass = Class.forName(cmdContext.getCommand(), true, classLoader);
+          } else {
+            cmdclass = server.getDefaultNailClass();
+          }
+        } catch (ClassNotFoundException ex) {
+          throw new NGNailNotFoundException("Nail class not found: " + cmdContext.getCommand(), ex);
+        }
+
+        Object[] methodArgs = new Object[1];
+        Method mainMethod; // will be either main(String[]) or nailMain(NGContext)
+        String[] cmdlineArgs =
+            cmdContext
+                .getCommandArguments()
+                .toArray(new String[cmdContext.getCommandArguments().size()]);
+
+        boolean isStaticNail = true; // See: NonStaticNail.java
+
+        Class[] interfaces = cmdclass.getInterfaces();
+
+        for (int i = 0; i < interfaces.length; i++) {
+          if (interfaces[i].equals(NonStaticNail.class)) {
+            isStaticNail = false;
+            break;
           }
         }
+
+        if (!isStaticNail) {
+          mainMethod = cmdclass.getMethod("nailMain", new Class[] {String[].class});
+          methodArgs[0] = cmdlineArgs;
+        } else {
+          try {
+            mainMethod = cmdclass.getMethod("nailMain", nailMainSignature);
+            NGContext context = new NGContext();
+            context.setArgs(cmdlineArgs);
+            context.in = in;
+            context.out = out;
+            context.err = err;
+            context.setCommand(cmdContext.getCommand());
+            context.setNGServer(server);
+            context.setCommunicator(comm);
+            context.setEnv(cmdContext.getEnvironmentVariables());
+            context.setInetAddress(socket.getInetAddress());
+            context.setPort(socket.getPort());
+            context.setWorkingDirectory(cmdContext.getWorkingDirectory());
+            methodArgs[0] = context;
+          } catch (NoSuchMethodException toDiscard) {
+            // nailMain is not found, let's try main(String[])
+            try {
+              mainMethod = cmdclass.getMethod("main", mainSignature);
+              methodArgs[0] = cmdlineArgs;
+            } catch (NoSuchMethodException ex) {
+              // failed to find 'main' too, so give up and throw
+              throw new NGNailNotFoundException(
+                  "Can't find nailMain or main functions in " + cmdclass.getName(), ex);
+            }
+          }
+        }
+
+        server.nailStarted(cmdclass);
+
+        try {
+          mainMethod.invoke(isStaticNail ? null : cmdclass.newInstance(), methodArgs);
+        } catch (InvocationTargetException ite) {
+          throw ite.getCause();
+        } finally {
+          server.nailFinished(cmdclass);
+        }
+
+        // send exit code 0 to the client; if nail previously called NGSession.exit() or
+        // System.exit() explicitly then this will do nothing
+        comm.exit(NGConstants.EXIT_SUCCESS);
+
+      } catch (NGExitException exitEx) {
+        // We got here if nail called System.exit(). Just quit with provided exit code.
+        LOG.log(Level.INFO, "Nail cleanly exited with status {0}", exitEx.getStatus());
+        comm.exit(exitEx.getStatus());
+      } catch (NGNailNotFoundException notFoundEx) {
+        LOG.log(Level.WARNING, "Nail not found", notFoundEx);
+        comm.exit(NGConstants.EXIT_NOSUCHCOMMAND);
+      } catch (Throwable t) {
+        LOG.log(Level.WARNING, "Nail raised unhandled exception", t);
+        comm.exit(NGConstants.EXIT_EXCEPTION); // remote exception constant
       }
-
-      server.nailStarted(cmdclass);
-
-      try {
-        mainMethod.invoke(isStaticNail ? null : cmdclass.newInstance(), methodArgs);
-      } catch (InvocationTargetException ite) {
-        throw ite.getCause();
-      } finally {
-        server.nailFinished(cmdclass);
-      }
-
-      // send exit code 0 to the client; if nail previously called NGSession.exit() or
-      // System.exit() explicitly then this will do nothing
-      comm.exit(NGConstants.EXIT_SUCCESS);
-
-    } catch (NGExitException exitEx) {
-      // We got here if nail called System.exit(). Just quit with provided exit code.
-      LOG.log(Level.INFO, "Nail cleanly exited with status {0}", exitEx.getStatus());
-      comm.exit(exitEx.getStatus());
-    } catch (NGNailNotFoundException notFoundEx) {
-      LOG.log(Level.WARNING, "Nail not found", notFoundEx);
-      comm.exit(NGConstants.EXIT_NOSUCHCOMMAND);
-    } catch (Throwable t) {
-      LOG.log(Level.WARNING, "Nail raised unhandled exception", t);
-      comm.exit(NGConstants.EXIT_EXCEPTION); // remote exception constant
+    } catch (IOException e) {
+      // handle any exceptions thrown by close()
+      LOG.log(Level.WARNING, "Nail raised an exception while closing the streams", e);
     }
   }
 
